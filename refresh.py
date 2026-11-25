@@ -400,7 +400,8 @@ def main():
             health[f"Final scores {past}"] = "Unavailable · will retry"
     rows = archive_results(results_games, ESPN)
     distribution = Counter(tempo(t["tempo"]) for t in api[0].values()) if api else None
-    save(Path("data.json"), dict(date=day, updated=stamp, source=source, health=health, games=games,
+    research = json.loads(Path(__file__).with_name("research.json").read_text())
+    save(Path("data.json"), dict(research=research, date=day, updated=stamp, source=source, health=health, games=games,
                                 distribution=distribution, review=summarize(rows), archive=rows))
     print(json.dumps(dict(date=day, games=len(games), projections=sum(bool(g["model"]) for g in games),
                           kambi=len(kambi), kalshi=len(kalshi), receipts=len(rows), health=health)))

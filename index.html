@@ -29,12 +29,14 @@ summary:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var
 <h2>Today’s research board</h2><p id="status" class="status" role="status">Loading today’s slate…</p>
 <div class="controls">
 <label>Sort by<select id="sort"><option value="time">Game time</option><option value="total">Projected total</option><option value="pace">Projected possessions</option><option value="tempoGap">Tempo separation</option><option value="gap">Market separation</option><option value="environment">Scoring environment</option><option value="complete">Data completeness</option></select></label>
+<label>Team tempo<select id="tempo"><option value="">All tempos</option><option>Very Fast</option><option>Fast</option><option>Average</option><option>Slow</option><option>Very Slow</option></select></label>
 <label>Direction<select id="direction"><option value="">All directions</option><option>OVER</option><option>UNDER</option></select></label>
 <label>Scoring environment<select id="environment"><option value="">All environments</option><option>High scoring</option><option>Midrange scoring</option><option>Low scoring</option></select></label>
 <label>Data completeness<select id="complete"><option value="">All games</option><option value="model">Projection available</option><option value="market">Market comparison available</option><option value="missing">Missing projection or market</option></select></label>
 </div>
 <p id="count" class="muted"></p><div id="games"></div>
 <section><details><summary>Data status and tempo distribution</summary><div class="body" id="health"></div></details></section>
+<section><details><summary>Historical model comparison</summary><div class="body" id="research"></div></details></section>
 <section><details><summary>Pregame receipts and results</summary><div class="body" id="review"></div></details></section>
 </main>
 <script>
@@ -108,11 +110,11 @@ function history(data) {
       (r.markets.length?marketTable(r.markets):'')+(f?.grades.length?'<p>'+f.grades.map(g=>esc(g.source+' '+(g.outcome||'ungraded'))).join(' · ')+'</p>':'')+'</div></details>').join('');
 }
 function render(data) {
-  const mode=el('sort').value, dir=el('direction').value, environment=el('environment').value, completeness=el('complete').value;
+  const mode=el('sort').value, tempo=el('tempo').value, dir=el('direction').value, environment=el('environment').value, completeness=el('complete').value;
   const value = (g, key) => ({time:-Date.parse(g.start), total:g.model?.total, pace:g.model?.possessions, tempoGap:g.model?.tempoGap,
     gap:Math.abs(representative(g)?.gap), environment:{'High scoring':3,'Midrange scoring':2,'Low scoring':1}[g.model?.environment],
     complete:Number(Boolean(g.model))+Number(Boolean(representative(g)))})[key];
-  const rows=data.games.filter(g=>(!dir||representative(g)?.direction===dir)&&(!environment||g.model?.environment===environment)&&
+  const rows=data.games.filter(g=>(!tempo||g.model?.inputs?.some(t=>t.classification===tempo))&&(!dir||representative(g)?.direction===dir)&&(!environment||g.model?.environment===environment)&&
     (!completeness||(completeness==='model'?g.model:completeness==='market'?representative(g):!representative(g))))
     .sort((a,b)=>(Number.isFinite(value(b,mode))?value(b,mode):-Infinity)-(Number.isFinite(value(a,mode))?value(a,mode):-Infinity)||Date.parse(a.start)-Date.parse(b.start));
   el('count').textContent=rows.length+' of '+data.games.length+' games · Market separation measures a point difference.';
@@ -122,10 +124,19 @@ fetch('data.json',{cache:'no-store'}).then(r=>{if(!r.ok) throw Error('HTTP '+r.s
   const stale=data.date!==centralDate()||Date.now()-Date.parse(data.updated)>45*60000;
   el('status').textContent=(stale?'Stale slate · ':'')+data.date+' · Last successful refresh '+ct(data.updated,true)+' · All times Central';
   el('status').classList.toggle('warning',stale);
+  const snapshot=data.research?.tempo, historical=data.research?.historical;
+  const buckets=data.distribution||snapshot?.counts;
+  el('tempo').disabled=!data.games.some(game=>game.model?.inputs?.length);
   el('health').innerHTML='<p>'+link(data.source,'ESPN scoreboard')+'</p><ul>'+Object.entries(data.health||{}).map(([k,v])=>'<li>'+esc(k)+' · '+esc(v)+'</li>').join('')+'</ul>'+
-   '<p>'+(data.distribution?Object.entries(data.distribution).map(([k,v])=>esc(k)+' '+v).join(' · '):'Season tempo distribution unavailable. Thresholds remain experimental.')+'</p>';
+   '<p>'+(buckets?Object.entries(buckets).map(([k,v])=>esc(k)+' '+v).join(' · '):'Season tempo distribution unavailable.')+'</p>'+
+   (snapshot&&!data.distribution?'<p>'+link(snapshot.source,'KenPom season snapshot')+' · '+esc(snapshot.date)+' · Categories describe pace. They remain experimental.</p>':'');
+  if (historical) {
+    el('research').innerHTML='<p>'+historical.games+' paired forecasts saved before tipoff, '+esc(historical.firstTipUtcDate)+' through '+esc(historical.lastTipUtcDate)+' (tipoff dates in UTC).</p>'+
+      metrics([['Adjusted-efficiency model MAE',number(historical.additiveMae,2)],['Recent-score baseline MAE',number(historical.recentScoresMae,2)]])+
+      '<p>The recent-score benchmark used prior-season samples in '+historical.priorSeasonScoreSamples+' games. This archive did not contain the pregame team ratings needed to test the average-tempo model. The observed MAE difference is descriptive.</p><p>'+link(historical.source,'Archived pregame forecasts and finals')+'</p>';
+  }
   el('review').innerHTML=history(data);
-  for(const id of ['sort','direction','environment','complete']) el(id).addEventListener('change',()=>render(data));
+  for(const id of ['sort','tempo','direction','environment','complete']) el(id).addEventListener('change',()=>render(data));
   render(data);
 }).catch(error=>{
   el('status').textContent='The published slate could not be loaded.';

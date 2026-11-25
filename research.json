@@ -1,0 +1,17 @@
+{
+  "tempo": {
+    "season": 2027,
+    "date": "2026-11-25",
+    "source": "https://kenpom.com/",
+    "counts": {"Very Fast": 11, "Fast": 68, "Average": 217, "Slow": 65, "Very Slow": 4}
+  },
+  "historical": {
+    "games": 766,
+    "firstTipUtcDate": "2026-11-01",
+    "lastTipUtcDate": "2026-11-23",
+    "additiveMae": 13.760,
+    "recentScoresMae": 13.872,
+    "priorSeasonScoreSamples": 495,
+    "source": "https://github.com/DrKimberlyrobins/2026-docs-ncaab-war-room/tree/f333129399c109879d9d20557f69b56925281a27/data/archive/games"
+  }
+}
