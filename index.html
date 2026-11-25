@@ -9,7 +9,7 @@
 *{box-sizing:border-box}body{margin:0;font:16px system-ui,sans-serif;color:var(--ink);background:white}
 .wrap{max-width:1160px;margin:auto;padding-inline:clamp(14px,4vw,36px)}header{background:var(--navy);color:white;padding:28px 0;border-bottom:5px solid var(--gold)}
 h1{margin:4px 0;font-size:clamp(1.55rem,4vw,2.55rem)}h2{margin:0;font-size:1.27rem}p{line-height:1.55}
-.league{color:#ffdb95;font-size:.82rem;font-weight:700;letter-spacing:.05em}main{padding-block:24px 48px}
+.league-nav{display:flex;gap:8px;margin:13px 0 0}.league-nav a{color:white;border:1px solid #88a4c8;border-radius:5px;padding:6px 10px;text-decoration:none}.league-nav a[aria-current=page]{background:var(--gold);border-color:var(--gold);color:var(--navy);font-weight:700}.league{color:#ffdb95;font-size:.82rem;font-weight:700;letter-spacing:.05em}main{padding-block:24px 48px}
 .status,.muted,small{color:var(--muted)}.status{margin:7px 0 16px}
 section{margin-block:20px}.controls,.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:12px}
 label{font-size:.82rem;font-weight:700;color:var(--muted)}select{display:block;width:100%;background:white;color:var(--ink);font:inherit;margin-top:4px;padding:8px;border:1px solid var(--line);border-radius:5px}
@@ -24,7 +24,7 @@ summary:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var
 </style>
 </head>
 <body>
-<header><div class="wrap"><div class="league">MEN’S COLLEGE BASKETBALL</div><h1>Doc’s Full-Game Totals War Room</h1></div></header>
+<header><div class="wrap"><div class="league" id="league">MEN’S COLLEGE BASKETBALL</div><h1>Doc’s Full-Game Totals War Room</h1><nav class="league-nav" aria-label="League"><a id="college-link" href="./" aria-current="page">Men’s college</a><a id="nba-link" href="./nba/">NBA</a></nav></div></header>
 <main class="wrap">
 <h2>Today’s research board</h2><p id="status" class="status" role="status">Loading today’s slate…</p>
 <div class="controls">
@@ -42,6 +42,15 @@ summary:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var
 <script>
 'use strict';
 const el = id => document.getElementById(id);
+const nba = /\/nba(?:\/index\.html)?\/?$/.test(location.pathname);
+if (nba) {
+  el('league').textContent = 'NBA';
+  el('college-link').href = '../';
+  el('college-link').removeAttribute('aria-current');
+  el('nba-link').href = './';
+  el('nba-link').setAttribute('aria-current','page');
+  document.title = 'NBA · Doc’s Full-Game Totals War Room';
+}
 const number = (value, digits = 1) => Number.isFinite(value) ? value.toFixed(digits) : '—';
 const esc = value => String(value ?? '—').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const ct = (date, details = false) => date ? new Intl.DateTimeFormat('en-US', {
@@ -79,13 +88,13 @@ function card(game) {
   const teamNames = game.teams.map(t=>t.displayName);
   const details = m ? metrics([['Projected possessions',number(m.possessions)],['Scoring environment',m.environment],['Tempo separation',number(m.tempoGap)],
     ...teamNames.map((name,i)=>[name+' projected points',number(m.scores[i])])]) : '<p>Projection unavailable for this matchup.</p>';
-  const ratings = m?.inputs ? table(['Team','AdjT','Tempo','AdjO','AdjD','AdjEM','Rank','Record'],m.inputs.map((t,i)=>[
+  const ratings = m?.inputs ? table(nba?['Team','Poss. / 48','Tempo','OffRtg','DefRtg','NetRtg','Net rank','Record','Sample','Through CT']:['Team','AdjT','Tempo','AdjO','AdjD','AdjEM','Rank','Record'],m.inputs.map((t,i)=>[
     esc(teamNames[i]),number(t.tempo),'<strong class="'+(t.classification.includes('Fast')?'fast':t.classification.includes('Slow')?'slow':'average')+'">'+esc(t.classification)+'</strong>',
-    number(t.offense),number(t.defense),number(t.margin),esc(t.rank),esc(t.record)
+    number(t.offense),number(t.defense),number(t.margin),esc(t.rank),esc(t.record),...(nba?[esc(t.sample)+' games',esc(t.through)]:[])
   ])) : '<p class="muted">Individual ratings and tempo classifications are unavailable on the public board.</p>';
-  const explanation = m ? '<p>'+esc(m.version==='average-pace-efficiency-v1' ? 'The model averages both adjusted tempos, then pairs each offense with the opposing defense.' : 'The CBB calculator estimates possessions from both adjusted tempos and pairs each offense with the opposing defense using its national efficiency baseline.')+
+  const explanation = m ? '<p>'+esc(nba ? 'Estimated pace and efficiency use up to ten recent final box scores per team. Projected possessions average both teams’ pace, then each offense is paired with the opposing defense.' : m.version==='average-pace-efficiency-v1' ? 'The model averages both adjusted tempos, then pairs each offense with the opposing defense.' : 'The CBB calculator estimates possessions from both adjusted tempos and pairs each offense with the opposing defense using its national efficiency baseline.')+
     ' Projected matchup efficiencies are '+number(m.efficiencies[0])+' and '+number(m.efficiencies[1])+' points per 100 possessions. The scoring environment combines these efficiencies with projected possessions.</p>'+
-    '<p><small>'+link(m.source,'Projection source')+' · Ratings retrieved '+ct(m.ratingsAt,true)+' · '+esc(m.version)+(m.stale?' · <strong class="warning">Stale ratings</strong>':'')+'</small></p>' : '';
+    '<p><small>'+link(m.source,'Projection source')+' · '+(nba?'Estimate calculated ':'Ratings retrieved ')+ct(m.ratingsAt,true)+' · '+esc(m.version)+(m.stale?' · <strong class="warning">Stale ratings</strong>':'')+'</small></p>' : '';
   const quotes = game.markets.length ? (game.frozen?'<p class="muted">Saved pregame market quotes</p>':'')+marketTable(game.markets) : '<p class="muted">No verified market quote available.</p>';
   const rules = game.markets.filter(x=>x.rules).map(x=>'<li>'+esc(x.rules)+'</li>');
   return '<details class="game"><summary><span class="time">'+ct(game.start)+'<small>'+esc(game.status)+'</small></span><span class="matchup"><strong>'+esc(title(game))+'</strong><small>'+
@@ -129,7 +138,18 @@ fetch('data.json',{cache:'no-store'}).then(r=>{if(!r.ok) throw Error('HTTP '+r.s
   el('tempo').disabled=!data.games.some(game=>game.model?.inputs?.length);
   el('health').innerHTML='<p>'+link(data.source,'ESPN scoreboard')+'</p><ul>'+Object.entries(data.health||{}).map(([k,v])=>'<li>'+esc(k)+' · '+esc(v)+'</li>').join('')+'</ul>'+
    '<p>'+(buckets?Object.entries(buckets).map(([k,v])=>esc(k)+' '+v).join(' · '):'Season tempo distribution unavailable.')+'</p>'+
-   (snapshot&&!data.distribution?'<p>'+link(snapshot.source,'KenPom season snapshot')+' · '+esc(snapshot.date)+' · Categories describe pace. They remain experimental.</p>':'');
+   (snapshot&&!data.distribution&&!nba?'<p>'+link(snapshot.source,'KenPom season snapshot')+' · '+esc(snapshot.date)+' · Categories describe pace. They remain experimental.</p>':'');
+  if (nba && snapshot) {
+    el('health').innerHTML+='<p>NBA pace categories use the 10th, 30th, 70th and 90th percentile of rated teams. Scoring environment compares the projection with the recent league median for a 48-minute game, using an eight-point band.</p>';
+  }
+  const nbaHistory=data.research?.nbaHistorical;
+  if (nbaHistory) {
+    el('research').innerHTML='<p>'+nbaHistory.games+' games in a rolling check using only box scores from earlier Central dates. Full-game finals include overtime.</p>'+
+      metrics([['NBA model MAE',number(nbaHistory.modelMae,2)],['League median baseline MAE',number(nbaHistory.benchmarkMae,2)]])+
+      '<p>Source window '+esc(nbaHistory.firstDate)+' through '+esc(nbaHistory.lastDate)+' · '+link(nbaHistory.source,'ESPN NBA')+'</p>';
+  } else if (nba) {
+    el('research').innerHTML='<p>Historical comparison is unavailable until enough pregame box scores are present.</p>';
+  }
   if (historical) {
     el('research').innerHTML='<p>'+historical.games+' paired forecasts saved before tipoff, '+esc(historical.firstTipUtcDate)+' through '+esc(historical.lastTipUtcDate)+' (tipoff dates in UTC).</p>'+
       metrics([['Adjusted-efficiency model MAE',number(historical.additiveMae,2)],['Recent-score baseline MAE',number(historical.recentScoresMae,2)]])+

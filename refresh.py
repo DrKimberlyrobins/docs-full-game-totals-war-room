@@ -3,6 +3,7 @@ import json
 import math
 import os
 import re
+import sys
 import unicodedata
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -11,8 +12,11 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+import nba_ratings
+
 CENTRAL = ZoneInfo("America/Chicago")
 ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball"
+NBA_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 CBB = "https://drkimberlyrobins.github.io/2026-docs-ncaab-war-room/data"
 RAW = "https://raw.githubusercontent.com/DrKimberlyrobins/2026-docs-ncaab-war-room/main/data"
 KALSHI = "https://api.elections.kalshi.com/trade-api/v2"
@@ -66,8 +70,9 @@ def names(team):
     return {norm(team[key]) for key in ("location", "displayName", "shortDisplayName", "abbreviation") if team.get(key)}
 
 
-def scoreboard(day):
-    return ESPN + "/scoreboard?groups=50&limit=1000&dates=" + day.replace("-", "")
+def scoreboard(day, espn=ESPN):
+    query = "groups=50&" if espn == ESPN else ""
+    return espn + "/scoreboard?" + query + "limit=1000&dates=" + day.replace("-", "")
 
 
 def game_rows(events, day):
@@ -85,7 +90,8 @@ def game_rows(events, day):
             "id": str(event["id"]), "start": event["date"], "neutral": comp.get("neutralSite"),
             "venue": comp.get("venue", {}).get("fullName"), "state": state["state"],
             "status": state["description"], "statusCode": state["name"],
-            "teams": [sides[k]["team"] for k in ("away", "home")],
+            "teams": [dict(sides[k]["team"], record=next((r.get("summary") for r in sides[k].get("records", [])
+                                                          if r.get("type") == "total"), None)) for k in ("away", "home")],
             "scores": [int(sides[k]["score"]) for k in ("away", "home")]
             if final and all(str(sides[k].get("score", "")).isdigit() for k in ("away", "home")) else None,
         }
@@ -168,23 +174,28 @@ def projection(game, prepared, api):
                 evidence={"matchedTeams": row.get("matchedTeams"), "settings": source.get("config")})
 
 
-def kalshi_markets(day, games):
+def kalshi_markets(day, games, nba=False):
+    series = "KXNBATOTAL" if nba else "KXNCAAMBTOTAL"
+    phrase = "pro basketball" if nba else "men's college basketball"
     by_game = defaultdict(list)
     cursor = ""
     stamp = now().isoformat()
     for _ in range(12):
-        url = KALSHI + "/events?series_ticker=KXNCAAMBTOTAL&status=open&limit=100&with_nested_markets=true"
+        url = KALSHI + f"/events?series_ticker={series}&status=open&limit=100&with_nested_markets=true"
         payload = fetch(url + ("&cursor=" + cursor if cursor else ""))
         for event in payload["events"]:
             expected = instant(day + "T12:00:00+00:00").strftime("%y%b%d").upper()
-            if not event["event_ticker"].startswith("KXNCAAMBTOTAL-" + expected):
+            if not event["event_ticker"].startswith(series + "-" + expected):
                 continue
-            title = re.fullmatch(r"(.+) vs\.? (.+): Point Total", event["title"], re.I)
+            title = re.fullmatch(r"(.+) vs\.? (.+): (?:Point Total|Total Points)", event["title"], re.I)
             if not title:
                 continue
             first, second = map(norm, title.groups())
-            matches = [g for g in games if any(first in names(a) and second in names(b)
-                                               for a, b in (g["teams"], g["teams"][::-1]))]
+            abbreviations = re.match(r"^(\w+) vs (\w+) \(", event.get("sub_title", "")) if nba else None
+            matches = [g for g in games if any(
+                first in names(a) and second in names(b)
+                or (abbreviations and nba_team_code(a) == nba_code(abbreviations[1]) and nba_team_code(b) == nba_code(abbreviations[2]))
+                for a, b in (g["teams"], g["teams"][::-1]))]
             if len(matches) != 1:
                 continue
             for market in event.get("markets", []):
@@ -194,7 +205,7 @@ def kalshi_markets(day, games):
                         or not isinstance(line, (int, float)) or not 0 < line < 400
                         or not market.get("title", "").startswith("Full Game:")
                         or not re.search(r"over " + re.escape(f"{line:g}") + r" total points", rules, re.I)
-                        or "men's college basketball" not in rules.lower()):
+                        or phrase not in rules.lower()):
                     continue
                 by_game[matches[0]["id"]].append(dict(
                     source="Kalshi", line=line, yes=market.get("yes_ask_dollars"), no=market.get("no_ask_dollars"),
@@ -237,17 +248,39 @@ def kambi_detail(event):
     return preferred[0] if len(preferred) == 1 else None
 
 
-def kambi_markets(games):
-    url = KAMBI + "/listView/basketball/ncaab/all/all/matches.json" + KAMBI_QUERY + "&useCombined=true&useCombinedLive=true"
+def nba_code(code):
+    return {"GSW": "GS", "NYK": "NY", "NOP": "NO", "SAS": "SA", "BKN": "BKN",
+            "BRK": "BKN", "PHO": "PHX", "UTH": "UTAH", "UTA": "UTAH",
+            "WSH": "WAS"}.get(code.upper(), code.upper())
+
+
+def nba_team_code(team):
+    return nba_code(team.get("abbreviation", ""))
+
+
+def kambi_team_matches(label, team, nba):
+    if norm(label) in names(team):
+        return True
+    if not nba:
+        return False
+    code, _, nickname = label.partition(" ")
+    return (nickname and norm(nickname) == norm(team.get("name", ""))
+            and (nba_code(code) == nba_team_code(team)
+                 or (code.upper() == "LA" and nba_team_code(team) == "LAC")))
+
+
+def kambi_markets(games, nba=False):
+    group = "NBA" if nba else "NCAAB"
+    url = KAMBI + f"/listView/basketball/{group.lower()}/all/all/matches.json" + KAMBI_QUERY + "&useCombined=true&useCombinedLive=true"
     candidates = defaultdict(list)
     for row in fetch(url)["events"]:
         event = row.get("event", {})
-        if (event.get("sport"), event.get("group"), event.get("state")) != ("BASKETBALL", "NCAAB", "NOT_STARTED"):
+        if (event.get("sport"), event.get("group"), event.get("state")) != ("BASKETBALL", group, "NOT_STARTED"):
             continue
-        first, second = (norm(event.get(k, "")) for k in ("awayName", "homeName"))
+        first, second = (event.get(k, "") for k in ("awayName", "homeName"))
         matches = [g for g in games if g["state"] == "pre"
                    and abs((instant(g["start"]) - instant(event["start"])).total_seconds()) <= 900
-                   and any(first in names(a) and second in names(b) for a, b in (g["teams"], g["teams"][::-1]))]
+                   and any(kambi_team_matches(first, a, nba) and kambi_team_matches(second, b, nba) for a, b in (g["teams"], g["teams"][::-1]))]
         if len(matches) == 1:
             candidates[matches[0]["id"]].append(event)
     result, errors = {}, 0
@@ -369,17 +402,27 @@ def summarize(rows):
                       outcomes=group["outcomes"]) for key, group in sorted(groups.items())}
 
 
-def main():
-    day = str(now().astimezone(CENTRAL).date())
-    source = scoreboard(day)
+def main(nba=False):
+    global ARCHIVE
+    ARCHIVE = Path("archive/nba" if nba else "archive")
+    day_ct = now().astimezone(CENTRAL).date()
+    day = day_ct.isoformat()
+    espn = NBA_ESPN if nba else ESPN
+    source = scoreboard(day, espn)
     games = sorted(game_rows(fetch(source)["events"], day), key=lambda g: instant(g["start"]))
     health = {}
     jobs = {
-        "CBB ratings-based projections": lambda: upstream(f"calculator/daily/{day}.json"),
-        "KenPom direct ratings": lambda: ratings_api(day),
-        "Kalshi": lambda: kalshi_markets(day, games),
-        "Kambi": lambda: kambi_markets(games),
+        "Kalshi": lambda: kalshi_markets(day, games, nba),
+        "Kambi": lambda: kambi_markets(games, nba),
     }
+    if nba:
+        jobs["ESPN NBA box scores"] = lambda: nba_ratings.recent_boxes(
+            day_ct, ARCHIVE / "boxes", espn, fetch, scoreboard, instant, now, save)
+    else:
+        jobs.update({
+            "CBB ratings-based projections": lambda: upstream(f"calculator/daily/{day}.json"),
+            "KenPom direct ratings": lambda: ratings_api(day),
+        })
     values = {}
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = {label: pool.submit(job) for label, job in jobs.items()}
@@ -398,13 +441,24 @@ def main():
     if errors:
         health["Kambi"] = f"Partial · {errors} event requests failed"
     stamp = now().isoformat()
+    boxes, box_errors = values.get("ESPN NBA box scores", ({}, 0))
+    nba_boxes = list(boxes.values())
+    nba_profiles = nba_ratings.profiles(nba_boxes)
+    if nba and boxes:
+        health["ESPN NBA box scores"] = f"{len(boxes)} verified finals · {len(nba_profiles)} rated teams"
+        if box_errors:
+            health["ESPN NBA box scores"] += f" · {box_errors} source requests or boxes unavailable"
     for game in games:
         gid = game["id"]
-        game["model"] = projection(game, by_id, api)
+        if nba:
+            game["model"] = nba_ratings.forecast(game["teams"], nba_profiles, stamp, "https://www.espn.com/nba/scoreboard", baseline, nba_boxes)
+        else:
+            game["model"] = projection(game, by_id, api)
         if game["model"]:
             model = game["model"]
             model["stale"] = instant(stamp) - instant(model["ratingsAt"]) > timedelta(hours=24)
-            model["environment"] = "High scoring" if model["total"] >= 150 else "Low scoring" if model["total"] < 135 else "Midrange scoring"
+            if not nba:
+                model["environment"] = "High scoring" if model["total"] >= 150 else "Low scoring" if model["total"] < 135 else "Midrange scoring"
         game["markets"] = compare(kalshi.get(gid, []) + kambi.get(gid, []), game["model"] if not (game["model"] or {}).get("stale") else None)
         path = ARCHIVE / "receipts" / f"{gid}.json"
         if not path.exists():
@@ -428,17 +482,19 @@ def main():
             pending[past].add(path.stem)
     for past, ids in pending.items():
         try:
-            results_games.update({g["id"]: g for g in game_rows(fetch(scoreboard(past))["events"], past) if g["id"] in ids})
+            results_games.update({g["id"]: g for g in game_rows(fetch(scoreboard(past, espn))["events"], past) if g["id"] in ids})
         except (OSError, ValueError, KeyError):
             health[f"Final scores {past}"] = "Unavailable · will retry"
-    rows = archive_results(results_games, ESPN)
+    rows = archive_results(results_games, espn)
     distribution = Counter(tempo(t["tempo"]) for t in api[0].values()) if api else None
     research = json.loads(Path(__file__).with_name("research.json").read_text())
-    save(Path("data.json"), dict(research=research, date=day, updated=stamp, source=source, health=health, games=games,
+    if nba:
+        research = nba_ratings.research(nba_boxes, nba_profiles, baseline, "https://www.espn.com/nba/scoreboard")
+    save(Path("nba-data.json" if nba else "data.json"), dict(league="nba" if nba else "cbb", research=research, date=day, updated=stamp, source=source, health=health, games=games,
                                 distribution=distribution, review=summarize(rows), archive=rows))
     print(json.dumps(dict(date=day, games=len(games), projections=sum(bool(g["model"]) for g in games),
                           kambi=len(kambi), kalshi=len(kalshi), receipts=len(rows), health=health)))
 
 
 if __name__ == "__main__":
-    main()
+    main(nba=sys.argv[1:] == ["--nba"])

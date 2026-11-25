@@ -37,3 +37,21 @@ class TotalsTests(TestCase):
         self.assertIsNone(receipt(game, game["start"]))
         game["model"]["ratingsAt"] = (stamp - timedelta(days=2)).isoformat()
         self.assertIsNone(receipt(game, stamp.isoformat()))
+
+
+class NbaTotalsTests(TestCase):
+    def test_rate_estimators_and_overtime_pace(self):
+        from nba_ratings import profiles
+        games = [dict(teams={"1": 112, "2": 105}, possessions=106, minutes=53, date="2026-11-24",
+                      tip="2026-11-24T23:00:00Z", id=str(i)) for i in range(5)]
+        ratings = profiles(games)
+        self.assertEqual(ratings["1"]["tempo"], 96)
+        self.assertAlmostEqual(ratings["1"]["offense"], 11200 / 106)
+        self.assertAlmostEqual(ratings["2"]["defense"], 11200 / 106)
+
+    def test_kambi_provider_abbreviations_require_matching_nickname(self):
+        from refresh import kambi_team_matches
+        phoenix = {"abbreviation": "PHX", "name": "Suns"}
+        self.assertTrue(kambi_team_matches("PHO Suns", phoenix, True))
+        self.assertFalse(kambi_team_matches("PHO Rockets", phoenix, True))
+        self.assertTrue(kambi_team_matches("LA Clippers", {"abbreviation": "LAC", "name": "Clippers"}, True))

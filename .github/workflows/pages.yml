@@ -39,6 +39,12 @@ jobs:
         env:
           KENPOM_API_KEY: ${{ secrets.KENPOM_API_KEY }}
           KENPOM_PUBLICATION_AUTHORIZED: ${{ vars.KENPOM_PUBLICATION_AUTHORIZED }}
+      - name: Refresh NBA board
+        run: |
+          if ! python refresh.py --nba; then
+            echo "::warning::NBA refresh failed. Attempting to preserve the previous NBA board."
+            curl -fsSL --max-time 20 'https://drkimberlyrobins.github.io/docs-full-game-totals-war-room/nba/data.json' -o nba-data.json || rm -f nba-data.json
+          fi
       - name: Preserve immutable pregame receipts and finals
         run: |
           if test -d archive; then
@@ -52,7 +58,12 @@ jobs:
               git push origin HEAD:totals-receipts
             fi
           fi
-      - run: mkdir -p public && cp index.html data.json public/
+      - name: Package both leagues
+        run: |
+          mkdir -p public/nba
+          cp index.html data.json public/
+          cp index.html public/nba/
+          if test -f nba-data.json; then cp nba-data.json public/nba/data.json; fi
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
