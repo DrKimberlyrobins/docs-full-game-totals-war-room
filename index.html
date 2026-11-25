@@ -86,7 +86,7 @@ function card(game) {
   const explanation = m ? '<p>'+esc(m.version==='average-pace-efficiency-v1' ? 'The model averages both adjusted tempos, then pairs each offense with the opposing defense.' : 'The CBB calculator estimates possessions from both adjusted tempos and pairs each offense with the opposing defense using its national efficiency baseline.')+
     ' Projected matchup efficiencies are '+number(m.efficiencies[0])+' and '+number(m.efficiencies[1])+' points per 100 possessions. The scoring environment combines these efficiencies with projected possessions.</p>'+
     '<p><small>'+link(m.source,'Projection source')+' · Ratings retrieved '+ct(m.ratingsAt,true)+' · '+esc(m.version)+(m.stale?' · <strong class="warning">Stale ratings</strong>':'')+'</small></p>' : '';
-  const quotes = game.markets.length ? marketTable(game.markets) : '<p class="muted">No verified market quote available.</p>';
+  const quotes = game.markets.length ? (game.frozen?'<p class="muted">Saved pregame market quotes</p>':'')+marketTable(game.markets) : '<p class="muted">No verified market quote available.</p>';
   const rules = game.markets.filter(x=>x.rules).map(x=>'<li>'+esc(x.rules)+'</li>');
   return '<details class="game"><summary><span class="time">'+ct(game.start)+'<small>'+esc(game.status)+'</small></span><span class="matchup"><strong>'+esc(title(game))+'</strong><small>'+
     (game.neutral?'Neutral site · ':'')+esc(game.venue ?? 'Venue unavailable')+(game.scores?' · Final '+esc(game.scores.join('–')):'')+

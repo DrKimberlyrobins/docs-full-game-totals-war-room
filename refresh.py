@@ -288,21 +288,47 @@ def receipt(game, stamp):
             or instant(stamp) >= instant(game["start"])
             or not timedelta(0) <= instant(stamp) - instant(model["ratingsAt"]) <= timedelta(hours=24)):
         return None
-    markets = [m for m in game["markets"] if timedelta(0) <=
-               instant(stamp) - instant(m.get("retrievedAt", m["timestamp"])) <= timedelta(minutes=30)]
+    return dict(id=game["id"], start=game["start"], savedAt=stamp, teams=[t["displayName"] for t in game["teams"]],
+                model=model, markets=receipt_markets(game["markets"], stamp))
+
+
+def receipt_markets(markets, stamp):
+    fresh = [m for m in markets if timedelta(0) <=
+             instant(stamp) - instant(m.get("retrievedAt", m["timestamp"])) <= timedelta(minutes=30)]
     # One representative Kalshi threshold per game avoids counting correlated alternates as separate picks.
-    kalshi = [m for m in markets if m["source"] == "Kalshi" and m.get("yes") and m.get("no")]
-    selected = [m for m in markets if m["source"] == "Kambi"]
+    def available(price):
+        try:
+            return 0 < float(price) < 1
+        except (ValueError, TypeError):
+            return False
+    kalshi = [m for m in fresh if m["source"] == "Kalshi" and available(m.get("yes")) and available(m.get("no"))]
+    selected = [m for m in fresh if m["source"] == "Kambi"]
     if kalshi:
         selected.append(min(kalshi, key=lambda m: (abs(float(m["yes"]) - float(m["no"])), m["line"])))
-    return dict(id=game["id"], start=game["start"], savedAt=stamp, teams=[t["displayName"] for t in game["teams"]],
-                model=model, markets=selected)
+    return selected
+
+
+def load_receipt(path):
+    original = json.loads(path.read_text())
+    extensions = (ARCHIVE / "quotes").glob(path.stem + "-*.json")
+    return dict(original, markets=original["markets"] + [json.loads(file.read_text()) for file in sorted(extensions)])
+
+
+def save_later_quotes(game, stamp, captured):
+    if game["state"] != "pre" or game["statusCode"] != "STATUS_SCHEDULED" or instant(stamp) >= min(
+            instant(game["start"]), instant(captured["start"])):
+        return
+    saved_sources = {market["source"] for market in captured["markets"]}
+    new_quotes = [market.copy() for market in receipt_markets(game["markets"], stamp)
+                  if market["source"] not in saved_sources]
+    for market in compare(new_quotes, captured["model"]):
+        save(ARCHIVE / "quotes" / f'{game["id"]}-{market["source"]}.json', dict(market, savedAt=stamp))
 
 
 def archive_results(games_by_id, schedule_status):
     rows = []
     for path in sorted((ARCHIVE / "receipts").glob("*.json")):
-        captured = json.loads(path.read_text())
+        captured = load_receipt(path)
         final_path = ARCHIVE / "results" / path.name
         final = json.loads(final_path.read_text()) if final_path.exists() else None
         current = games_by_id.get(captured["id"])
@@ -385,6 +411,13 @@ def main():
             item = receipt(game, stamp)
             if item:
                 save(path, item)
+        elif game["state"] == "pre" and instant(stamp) < instant(game["start"]):
+            save_later_quotes(game, stamp, load_receipt(path))
+        if path.exists() and (game["state"] != "pre" or instant(stamp) >= instant(game["start"])):
+            frozen = load_receipt(path)
+            game["model"] = frozen["model"]
+            game["markets"] = frozen["markets"]
+            game["frozen"] = True
         game["receipt"] = path.exists()
     results_games = {g["id"]: g for g in games}
     pending = defaultdict(set)
