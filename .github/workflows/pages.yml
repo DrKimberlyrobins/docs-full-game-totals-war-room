@@ -6,11 +6,11 @@ on:
   schedule:
     - cron: '7,22,37,52 * * * *'
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 concurrency:
-  group: pages
+  group: totals-refresh-pages
   cancel-in-progress: false
 jobs:
   deploy:
@@ -23,7 +23,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Restore durable receipts
+        run: |
+          if git ls-remote --exit-code --heads origin totals-receipts; then
+            git fetch origin totals-receipts
+            git worktree add -b totals-receipts /tmp/totals-receipts FETCH_HEAD
+            if test -d /tmp/totals-receipts/archive; then
+              cp -a /tmp/totals-receipts/archive .
+            fi
+          else
+            git worktree add -b totals-receipts /tmp/totals-receipts HEAD
+          fi
+      - run: python -m unittest discover
       - run: python refresh.py
+        env:
+          KENPOM_API_KEY: ${{ secrets.KENPOM_API_KEY }}
+          KENPOM_PUBLICATION_AUTHORIZED: ${{ vars.KENPOM_PUBLICATION_AUTHORIZED }}
+      - name: Preserve immutable pregame receipts and finals
+        run: |
+          if test -d archive; then
+            cp -a archive /tmp/totals-receipts/
+            cd /tmp/totals-receipts
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add -f archive
+            if ! git diff --cached --quiet; then
+              git commit -m 'Archive pregame totals receipts and results'
+              git push origin HEAD:totals-receipts
+            fi
+          fi
       - run: mkdir -p public && cp index.html data.json public/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
@@ -31,3 +59,6 @@ jobs:
           path: public
       - uses: actions/deploy-pages@v4
         id: deployment
+        continue-on-error: true
+      - uses: actions/deploy-pages@v4
+        if: steps.deployment.outcome == 'failure'
